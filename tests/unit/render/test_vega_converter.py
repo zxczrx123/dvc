@@ -4,7 +4,7 @@ import pytest
 
 from dvc.exceptions import DvcException
 from dvc.render import VERSION_FIELD
-from dvc.render.converter.vega import FieldNotFoundError, VegaConverter, _lists
+from dvc.render.converter.vega import VegaConverter, _lists
 
 
 @pytest.mark.parametrize(
@@ -413,6 +413,40 @@ def test_finding_lists(dictionary, expected_result):
             },
             id="multi_file_y_same_prefix",
         ),
+        pytest.param(
+            {
+                "f": {"metric": [{"v": 1, "v2": 0.1, "v3": 0.01}]},
+                "f2": {"metric": [{"v": 2, "v2": 0.2, "v3": 0.02}]},
+            },
+            {"y": {"f": ["v2", "v3"], "f2": ["v2", "v3"]}, "x": {"f": "v", "f2": "v"}},
+            [
+                {
+                    "v": 1,
+                    "v2": 0.1,
+                    VERSION_FIELD: {
+                        "revision": "r",
+                        "filename": "f",
+                        "field": "v2",
+                    },
+                },
+                {
+                    "v": 1,
+                    "v2": 0.1,
+                    VERSION_FIELD: {
+                        "revision": "r",
+                        "filename": "f2",
+                        "field": "v2",
+                    },
+                },
+            ],
+            {
+                "x": "v",
+                "y": "v2",
+                "x_label": "v",
+                "y_label": "v2",
+            },
+            id="x_per_data_source",
+        ),
     ],
 )
 def test_convert(
@@ -458,16 +492,39 @@ def test_convert(
                         {"v": 3, "v2": 0.3},
                     ]
                 },
+                "f3": {
+                    "metric": [
+                        {"v": 4, "v2": 0.4},
+                    ]
+                },
             },
-            {"x": {"f": "v", "f2": "v3"}, "y": {"f": "v2"}},
-            FieldNotFoundError,
+            {"x": {"f": "v", "f2": "v"}, "y": {"f": "v2", "f2": "v2", "f3": "v2"}},
+            DvcException,
             id="unequal_x_y",
+        ),
+        pytest.param(
+            {
+                "f": {
+                    "metric": [
+                        {"v": 1, "v2": 0.1},
+                        {"v": 2, "v2": 0.2},
+                    ]
+                },
+                "f2": {
+                    "metric": [
+                        {"v": 3, "v2": 0.3},
+                    ]
+                },
+            },
+            {"x": {"f": "v", "f2": "v"}, "y": "v2"},
+            DvcException,
+            id="only_x_dict",
         ),
     ],
 )
 def test_convert_fail(input_data, properties, exc):
-    converter = VegaConverter("f", input_data, properties)
     with pytest.raises(exc):
+        converter = VegaConverter("f", input_data, properties)
         converter.flat_datapoints("r")
 
 

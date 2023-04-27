@@ -146,6 +146,29 @@ class VegaConverter(Converter):
             else:
                 self.inferred_properties["x"][self.plot_id] = x
 
+        # Infer x for a data source-field mapping.
+        elif isinstance(x, dict):
+            if not isinstance(y, dict):
+                raise DvcException(
+                    f"Error with {self.plot_id}: cannot specify a data source for x"
+                    " without a data source for y."
+                )
+            if len(x) > 1:
+                self.inferred_properties["x"] = {}
+                for file, fields in y.items():
+                    try:
+                        x_field = x[file]
+                    except KeyError:
+                        raise DvcException(
+                            f"Error with {self.plot_id}: no x value found for y data"
+                            " source {file}."
+                        )
+                    # Duplicate x for each y.
+                    if isinstance(fields, list):
+                        self.inferred_properties["x"][file] = [x_field] * len(fields)
+                    else:
+                        self.inferred_properties["x"][file] = x_field
+
         # Infer y.
         if y is None:
             self._infer_y_from_data()
@@ -212,14 +235,6 @@ class VegaConverter(Converter):
 
         ys = list(_get_ys(properties, file2datapoints))
 
-        num_xs = len(xs)
-        num_ys = len(ys)
-        if num_xs > 1 and num_xs != num_ys:
-            raise DvcException(
-                "Cannot have different number of x and y data sources. Found "
-                f"{num_xs} x and {num_ys} y data sources."
-            )
-
         all_datapoints = []
         if ys:
             all_y_files, all_y_fields = list(zip(*ys))
@@ -242,7 +257,7 @@ class VegaConverter(Converter):
             common_prefix_len = 0
 
         for i, (y_file, y_field) in enumerate(ys):
-            if num_xs > 1:
+            if len(xs) > 1:
                 x_file, x_field = xs[i]
             datapoints = [{**d} for d in file2datapoints.get(y_file, [])]
 
