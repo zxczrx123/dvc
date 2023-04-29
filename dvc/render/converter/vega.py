@@ -112,11 +112,6 @@ class VegaConverter(Converter):
     ):
         super().__init__(plot_id, data, properties)
         self.plot_id = plot_id
-        self.inferred_properties: Dict = {}
-
-        # TODO we should be handling that in `convert`,
-        #      to avoid stateful `self.inferred_properties`
-        self._infer_x_y()
 
     def _infer_y_from_data(self):
         if self.plot_id in self.data:
@@ -124,57 +119,44 @@ class VegaConverter(Converter):
                 if all(isinstance(item, dict) for item in lst):
                     datapoint = first(lst)
                     field = last(datapoint.keys())
-                    self.inferred_properties["y"] = {self.plot_id: field}
-                    break
+                    return {self.plot_id: field}
 
     def _infer_x_y(self):
         x = self.properties.get("x", None)
         y = self.properties.get("y", None)
 
+        inferred_properties: Dict = {}
+
         # Infer x.
         if isinstance(x, str):
-            self.inferred_properties["x"] = {}
+            inferred_properties["x"] = {}
             # If multiple y files, duplicate x for each file.
             if isinstance(y, dict):
                 for file, fields in y.items():
                     # Duplicate x for each y.
                     if isinstance(fields, list):
-                        self.inferred_properties["x"][file] = [x] * len(fields)
+                        inferred_properties["x"][file] = [x] * len(fields)
                     else:
-                        self.inferred_properties["x"][file] = x
+                        inferred_properties["x"][file] = x
             # Otherwise use plot ID as file.
             else:
-                self.inferred_properties["x"][self.plot_id] = x
+                inferred_properties["x"][self.plot_id] = x
 
-        # Infer x for a data source-field mapping.
-        elif isinstance(x, dict):
-            if not isinstance(y, dict):
-                raise DvcException(
-                    f"Error with {self.plot_id}: cannot specify a data source for x"
-                    " without a data source for y."
-                )
-            if len(x) > 1:
-                self.inferred_properties["x"] = {}
-                for file, fields in y.items():
-                    try:
-                        x_field = x[file]
-                    except KeyError:
-                        raise DvcException(
-                            f"Error with {self.plot_id}: no x value found for y data"
-                            " source {file}."
-                        )
-                    # Duplicate x for each y.
-                    if isinstance(fields, list):
-                        self.inferred_properties["x"][file] = [x_field] * len(fields)
-                    else:
-                        self.inferred_properties["x"][file] = x_field
+        # If x is a dict, y must be a dict.
+        elif isinstance(x, dict) and not isinstance(y, dict):
+            raise DvcException(
+                f"Error with {self.plot_id}: cannot specify a data source for x"
+                " without a data source for y."
+            )
 
         # Infer y.
         if y is None:
-            self._infer_y_from_data()
+            inferred_properties["y"] = self._infer_y_from_data()
         # If y files not provided, use plot ID as file.
         elif not isinstance(y, dict):
-            self.inferred_properties["y"] = {self.plot_id: y}
+            inferred_properties["y"] = {self.plot_id: y}
+
+        return inferred_properties
 
     def _find_datapoints(self):
         result = {}
@@ -216,51 +198,70 @@ class VegaConverter(Converter):
             return first(fields)
         return "x"
 
-    def flat_datapoints(self, revision):  # noqa: C901, PLR0912
-        file2datapoints, properties = self.convert()
+    @staticmethod
+    def _props_update(xs, ys):
+        props_update: Dict = {}
 
-        props_update = {}
+        xs_dict = dict(xs)
+        all_x_files = set(xs_dict.keys())
+        all_x_fields = set(xs_dict.values())
+        # assign x field
+        if all_x_fields:
+            props_update["x_files"] = all_x_files
+            props_update["x"] = first(all_x_fields)
+        # override to unified x field name if there are different x fields
+        if len(all_x_fields) > 1:
+            props_update["x"] = "dvc_inferred_x_value"
 
-        xs = list(_get_xs(properties, file2datapoints))
-
-        # assign "step" if no x provided
-        if not xs:
-            x_file, x_field = (
-                None,
-                INDEX_FIELD,
-            )
-        else:
-            x_file, x_field = xs[0]
-        props_update["x"] = x_field
-
-        ys = list(_get_ys(properties, file2datapoints))
-
-        all_datapoints = []
-        if ys:
-            all_y_files, all_y_fields = list(zip(*ys))
-            all_y_fields = set(all_y_fields)
-            all_y_files = set(all_y_files)
-        else:
-            all_y_files = set()
-            all_y_fields = set()
-
+        all_y_files = {file for file, field in ys}
+        all_y_fields = {field for file, field in ys}
+        # assign y files and field
+        props_update["y_files"] = all_y_files
+        props_update["y"] = first(all_y_fields)
         # override to unified y field name if there are different y fields
         if len(all_y_fields) > 1:
             props_update["y"] = "dvc_inferred_y_value"
-        else:
-            props_update["y"] = first(all_y_fields)
+
+        num_x_files = len(all_x_files)
+        num_y_files = len(all_y_files)
+        if num_x_files > 1 and num_x_files != num_y_files:
+            raise DvcException(
+                "Cannot have different number of x and y data sources. Found "
+                f"{num_x_files} x and {num_y_files} y data sources."
+            )
+
+        return props_update
+
+    @staticmethod
+    def _common_prefix_len(paths):
+        common_prefix_len = 0
+        if len(paths) > 1:
+            common_prefix_len = len(os.path.commonpath(paths))
+        return common_prefix_len
+
+    def flat_datapoints(self, revision):
+        file2datapoints, properties = self.convert()
+
+        xs = list(_get_xs(properties, file2datapoints))
+        ys = list(_get_ys(properties, file2datapoints))
+
+        props_update = self._props_update(xs, ys)
 
         # get common prefix to drop from file names
-        if len(all_y_files) > 1:
-            common_prefix_len = len(os.path.commonpath(all_y_files))
-        else:
-            common_prefix_len = 0
+        all_y_files = props_update.pop("y_files", [])
+        common_prefix_len = self._common_prefix_len(all_y_files)
 
-        for i, (y_file, y_field) in enumerate(ys):
-            if len(xs) > 1:
-                x_file, x_field = xs[i]
+        # fixed x values for single x
+        all_x_files = props_update.pop("x_files", [])
+        x_file = first(all_x_files)
+        x_field = props_update.get("x", None)
+
+        all_datapoints = []
+
+        for y_file, y_field in ys:
             datapoints = [{**d} for d in file2datapoints.get(y_file, [])]
 
+            # update if multiple y values
             if props_update.get("y", None) == "dvc_inferred_y_value":
                 _update_from_field(
                     datapoints,
@@ -268,15 +269,24 @@ class VegaConverter(Converter):
                     source_field=y_field,
                 )
 
-            if x_field == INDEX_FIELD and x_file is None:
-                _update_from_index(datapoints, INDEX_FIELD)
-            else:
+            # map x to y if multiple x files
+            if len(all_x_files) > 1:
+                try:
+                    x_file = y_file
+                    x_field = dict(xs)[x_file]
+                except KeyError:
+                    raise DvcException(  # noqa: B904
+                        f"No x value found for y data source {y_file}."
+                    )
+            # update x field
+            if x_field:
                 x_datapoints = file2datapoints.get(x_file, [])
                 try:
                     _update_from_field(
                         datapoints,
-                        field=x_field,
+                        field=props_update["x"],
                         source_datapoints=x_datapoints,
+                        source_field=x_field,
                     )
                 except IndexError:
                     raise DvcException(  # noqa: B904
@@ -284,6 +294,10 @@ class VegaConverter(Converter):
                         f"'{y_field}' from '{y_file}'. "
                         "They have to have same length."
                     )
+            # assign "step" if no x provided
+            else:
+                props_update["x"] = INDEX_FIELD
+                _update_from_index(datapoints, INDEX_FIELD)
 
             y_file_short = y_file[common_prefix_len:].strip("/\\")
             _update_all(
@@ -322,7 +336,8 @@ class VegaConverter(Converter):
               might be utilizing other fields in their custom plots.
         """
         datapoints = self._find_datapoints()
-        properties = {**self.properties, **self.inferred_properties}
+        inferred_properties = self._infer_x_y()
+        properties = {**self.properties, **inferred_properties}
 
         properties["y_label"] = self.infer_y_label(properties)
         properties["x_label"] = self.infer_x_label(properties)
