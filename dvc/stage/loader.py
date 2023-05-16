@@ -1,4 +1,5 @@
 import logging
+import tempfile
 from collections.abc import Mapping
 from copy import deepcopy
 from itertools import chain
@@ -10,6 +11,7 @@ from dvc import dependency, output
 from dvc.parsing import FOREACH_KWD, JOIN, EntryNotFound
 from dvc.parsing.versions import LOCKFILE_VERSION
 from dvc.utils.objects import cached_property
+from dvc.utils.serialize import dump_yaml
 from dvc_data.hashfile.hash_info import HashInfo
 from dvc_data.hashfile.meta import Meta
 
@@ -137,6 +139,12 @@ class StageLoader(Mapping):
 
         try:
             resolved_data = self.resolver.resolve_one(name)
+            with tempfile.NamedTemporaryFile() as tmp:
+                dump_yaml(tmp.name, resolved_data)
+                yaml_contents = tmp.read().decode("utf-8")
+                logger.trace(  # type: ignore[attr-defined]
+                    "Contents of resolved stage %s:\n%s", name, yaml_contents
+                )
         except EntryNotFound:
             raise StageNotFound(self.dvcfile, name)  # noqa: B904
 
