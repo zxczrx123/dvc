@@ -48,8 +48,9 @@ def apply(repo: "Repo", rev: str, **kwargs):  # noqa: C901
             raise InvalidExpRevError(rev) from exc
     except BaselineMismatchError as exc:
         raise InvalidExpRevError(rev) from exc
-
-    _apply(repo, exp_rev, name=rev, is_stash=is_stash)
+    # import pdb; pdb.set_trace()
+    # _apply(repo, exp_rev, name=rev, is_stash=is_stash)
+    # import pdb; pdb.set_trace()
     dvc_checkout(repo, **kwargs)
 
     repo.scm.set_ref(EXEC_APPLY, exp_rev)

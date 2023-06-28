@@ -18,7 +18,7 @@ class CmdExperimentsApply(CmdBase):
                 "\n\tgit reset --hard\n"
                 "\tgit stash apply refs/exps/apply/stash\n"
             )
-        self.repo.experiments.apply(self.args.experiment)
+        self.repo.experiments.apply(self.args.experiment, force=True)
 
         return 0
 
